@@ -4,7 +4,7 @@ const crypto = require("crypto");
 const zipLocal = require("zip-local");
 
 const PREFIX = "./dist";
-const VERSION = Date.now();
+const VERSION = "0.1.0";
 
 if (fs.existsSync(PREFIX)) fs.rmSync(PREFIX, { recursive: true });
 fs.mkdirSync(PREFIX);
