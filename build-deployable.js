@@ -6,7 +6,7 @@ const zipLocal = require("zip-local");
 const PREFIX = "./dist";
 
 const DATE = new Date();
-const VERSION = `${DATE.getFullYear()}.${DATE.getFullMonth()}.${DATE.getDate()}.${DATE.getHours() * 3600 + DATE.getMinutes() * 60 + DATE.getSeconds()}`;
+const VERSION = `${DATE.getFullYear()}.${DATE.getMonth()}.${DATE.getDate()}.${DATE.getHours() * 3600 + DATE.getMinutes() * 60 + DATE.getSeconds()}`;
 
 if (fs.existsSync(PREFIX)) fs.rmSync(PREFIX, { recursive: true });
 fs.mkdirSync(PREFIX);
