@@ -4,7 +4,9 @@ const crypto = require("crypto");
 const zipLocal = require("zip-local");
 
 const PREFIX = "./dist";
-const VERSION = "0.1.0";
+
+const DATE = new Date();
+const VERSION = `${DATE.getFullYear()}.${DATE.getFullMonth()}.${DATE.getDate()}.${DATE.getHours() * 3600 + DATE.getMinutes() * 60 + DATE.getSeconds()}`;
 
 if (fs.existsSync(PREFIX)) fs.rmSync(PREFIX, { recursive: true });
 fs.mkdirSync(PREFIX);
@@ -17,8 +19,10 @@ let addonsXmlContent = `<?xml version="1.0" encoding="UTF-8"?>
 <addons>`;
 
 for (const plugin of fs.readdirSync("./src").filter((folder) => folder.startsWith("plugin."))) {
-    const addonXml = fs.readFileSync(`./src/${plugin}/${plugin}/addon.xml`).toString().split("\n").slice(1).join("\n");
-    addonsXmlContent += addonXml.replaceAll("0.1.0", VERSION) + "\n";
+    const addonXml = fs.readFileSync(`./src/${plugin}/${plugin}/addon.xml`).toString().replaceAll("0.1.0", VERSION);
+    addonsXmlContent += addonXml.split("\n").slice(1).join("\n") + "\n";
+
+    fs.writeFileSync(`./src/${plugin}/${plugin}/addon.xml`, addonXml);
 
     fs.mkdirSync(`${PREFIX}/${plugin}`);
 
