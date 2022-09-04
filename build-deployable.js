@@ -19,14 +19,14 @@ let addonsXmlContent = `<?xml version="1.0" encoding="UTF-8"?>
 <addons>`;
 
 for (const plugin of fs.readdirSync("./src").filter((folder) => folder.startsWith("plugin."))) {
-    const addonXml = fs.readFileSync(`./src/${plugin}/${plugin}/addon.xml`).toString().replaceAll("0.1.0", VERSION);
-    addonsXmlContent += addonXml.split("\n").slice(1).join("\n") + "\n";
+    const addonXml = fs.readFileSync(`./src/${plugin}/${plugin}/addon.xml`).toString();
+    addonsXmlContent += addonXml;
 
-    fs.writeFileSync(`./src/${plugin}/${plugin}/addon.xml`, addonXml);
+    const version = addonXml.match(/<addon .+ version="\S+"/)[0].match(/version="\S+"/)[0].replace("version=\"", "").replace("\"", "");
 
     fs.mkdirSync(`${PREFIX}/${plugin}`);
 
-    zipLocal.sync.zip(`./src/${plugin}`).compress().save(`./dist/${plugin}/${plugin}-${VERSION}.zip`);
+    zipLocal.sync.zip(`./src/${plugin}`).compress().save(`./dist/${plugin}/${plugin}-${version}.zip`);
 }
 
 addonsXmlContent += "</addons>";
