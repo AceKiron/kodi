@@ -1,4 +1,4 @@
 # -*- coding: utf-8 -*-
-from lib.Plugin import main
+from Lib.Plugin import main
 
 main() # See bottom of Plugin.py.

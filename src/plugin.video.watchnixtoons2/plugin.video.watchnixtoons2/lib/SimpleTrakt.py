@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 import requests
+
 import xbmcgui
 from xbmc import sleep
 
-class SimpleTrakt():
 
+class SimpleTrakt():
     TRAKT_API_URL = 'https://api.trakt.tv'
 
     CLIENT_ID = 'fd584905ac39b30b8458d583b75ea1b39743e036b293da91c838fdc3cc59dbcc'

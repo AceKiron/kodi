@@ -1,26 +1,43 @@
 # -*- coding: utf-8 -*-
-import re, sys, requests
+from re import compile, findall, finditer, search, DOTALL
+import sys, ssl
+from requests import Session, get, post, head, exceptions
 import six
+import os #added by Christian Haitian
 
+try:  #added by Christian Haitian
+  import cPickle as pickle  #added by Christian Haitian
+except:  #added by Christian Haitian
+  import pickle   #added by Christian Haitian
+
+import datetime #added by Christian Haitian
 from itertools import chain
 from base64 import b64decode
 from time import time, sleep
 from six.moves import urllib_parse
-from string import ascii_uppercase
 
-import xbmc, xbmcgui, xbmcaddon, xbmcplugin
-import ssl
-from lib.Common import *
-from lib.SimpleTrakt import SimpleTrakt
+try:
+  from urllib.parse import urlparse, urljoin
+except:
+  from urlparse import urlparse, urljoin
+
+from string import ascii_uppercase
+from os import sep as osSeparator #added by Christian Haitian
+
+import xbmc
+import xbmcgui
+import xbmcaddon
+import xbmcplugin
+if six.PY3:
+  xrange=range
+
+from Lib.Common import *
+from Lib.SimpleTrakt import SimpleTrakt
 
 # Disable urllib3's "InsecureRequestWarning: Unverified HTTPS request is being made" warnings
+import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
-
-BASEURL = 'https://www.wcofun.com'
-# Due to a recent bug on the server end, the mobile URL is now only used on 'makeLatestCatalog()'.
-# BASEURL_ALT = 'https://m.wcostream.com' # Mobile version of one of their domains (seems to be the only one). now has cloudflare
-BASEURL_ALT = 'https://www.wcofun.com'
 
 from urllib3.poolmanager import PoolManager
 from requests.adapters import HTTPAdapter
@@ -47,6 +64,19 @@ tls_adapters = [TLS12HttpAdapter(), TLS11HttpAdapter()]
 
 PLUGIN_ID = int(sys.argv[1])
 PLUGIN_URL = sys.argv[0]
+
+#Mod by Christian Haitian starts here
+ADDON = xbmcaddon.Addon()
+if (not (ADDON.getSetting('watchnixtoons2.name') and not ADDON.getSetting('watchnixtoons2.name').isspace())):
+    BASEURL = 'https://www.wcofun.net'
+else:
+    BASEURL = 'https://user.wco.tv'
+#Mod by Christian Haitian ends here
+
+# Due to a recent bug on the server end, the mobile URL is now only used on 'makeLatestCatalog()'.
+# BASEURL_MOBILE = 'https://m.wcostream.com' # Mobile version of one of their domains (seems to be the only one).
+BASEURL_ALT = 'https://www.wcofun.net'
+
 PROPERTY_CATALOG_PATH = 'wnt2.catalogPath'
 PROPERTY_CATALOG = 'wnt2.catalog'
 PROPERTY_EPISODE_LIST_URL = 'wnt2.listURL'
@@ -54,23 +84,70 @@ PROPERTY_EPISODE_LIST_DATA = 'wnt2.listData'
 PROPERTY_LATEST_MOVIES = 'wnt2.latestMovies'
 PROPERTY_INFO_ITEMS = 'wnt2.infoItems'
 PROPERTY_SESSION_COOKIE = 'wnt2.cookie'
+PROPERTY_URL_CACHE = 'wnt2.URLCache'
+PROPERTY_URL_CACHE_QUOTE = 'wnt2.URLCacheQuote'
 
-ADDON = xbmcaddon.Addon()
+#Mod by Christian Haitian starts here
+#Define addon plugin directory
+if BASEURL == 'https://user.wco.tv':
+    Data_Dir = os.path.join(xbmcaddon.Addon().getAddonInfo('path'))
+    login = ADDON.getSetting('watchnixtoons2.name')
+    password = ADDON.getSetting('watchnixtoons2.password')
+# Assuming two cookies are used for persistent login.
+# (Find it by tracing the login process)
+    persistentCookieNames = ['wordpress_sec_231de03aca492828e4d084c4d94c5935', 'wordpress_logged_in_231de03aca492828e4d084c4d94c5935']
+    URL = 'https://user.wco.tv'
+    urlData = urlparse(URL)
+#Downloaded wco cookie will be stored addon plugin directory
+    cookieFile = Data_Dir + osSeparator + urlData.netloc + '.cookie'
+    signinUrl = urljoin(URL, "/wp-login.php")
+#Check if cookie is older than 24 hours.  If so delete, it so it can be recreated.
+    if os.access(cookieFile, os.F_OK):
+        date_check = datetime.datetime.fromtimestamp(os.path.getmtime(cookieFile))
+        if datetime.datetime.now() - date_check > datetime.timedelta(hours=24):
+                os.remove(cookieFile)
+
+#Setup wco session with a new cookie if it does not exists.
+    with Session() as session:
+        try:
+            with open(cookieFile, 'rb') as f:
+                session.cookies.update(pickle.load(f))
+        except Exception:
+        # If could not load cookies from file, get the new ones by login in
+            post = session.post(
+                signinUrl,
+                data={
+                    'log': login,
+                    'pwd': password,
+                    }
+            )
+            try:
+                with open(cookieFile, 'wb') as f:
+                    jar = requests.cookies.RequestsCookieJar()
+                    for cookie in session.cookies:
+                        if cookie.name in persistentCookieNames:
+                            jar.set_cookie(cookie)
+                    pickle.dump(jar, f)
+            except Exception as e:
+                os.remove(cookieFile)
+                raise(e)
+#Mod by Christian Haitian ends here
+
 # Show catalog: whether to show the catalog categories or to go straight to the "ALL" section with all items visible.
 ADDON_SHOW_CATALOG = ADDON.getSetting('showCatalog') == 'true'
 # Use Latest Releases date: whether to sort the Latest Releases items by their date, or with a catalog.
 ADDON_LATEST_DATE = ADDON.getSetting('useLatestDate') == 'true'
 # Use Latest Releases thumbs: whether to show a little thumbnail available for the Latest Releases items only.
-ADDON_LATEST_THUMBS = ADDON.getSetting('showLatestThumbs') == 'true'
+ADDON_LATEST_THUMBS = ADDON.getSetting('showLatestThumbs') == 'false'
 # Use poster images for each catalog folder. Makes for a better experience on custom Kodi skins.
 ADDON_CATALOG_THUMBS = ADDON.getSetting('showCatalogThumbs') == 'true'
 ADDON_ICON = ADDON.getAddonInfo('icon')
-ADDON_ICON_DICT = {'icon': ADDON_ICON, 'thumb': ADDON_ICON, 'poster': ADDON_ICON}
+ADDON_FANART = os.path.join(xbmcaddon.Addon().getAddonInfo('path')) + osSeparator + 'fanart.jpg'
+ADDON_ICON_DICT = {'icon': ADDON_ICON, 'thumb': ADDON_ICON, 'poster': ADDON_ICON, 'fanart': ADDON_FANART}
 ADDON_TRAKT_ICON = 'special://home/addons/plugin.video.watchnixtoons2/resources/traktIcon.png'
 
 # To let the source website know it's this plugin. Also used inside "makeLatestCatalog()" and "actionResolve()".
-WNT2_USER_AGENT = 'Mozilla/5.0 (compatible; WatchNixtoons2/0.4.1; ' \
-'+https://github.com/doko-desuka/plugin.video.watchnixtoons2)'
+WNT2_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/106.0.0.0 Safari/537.36'
 
 MEDIA_HEADERS = None # Initialized in 'actionResolve()'.
 
@@ -130,7 +207,7 @@ def actionCatalogMenu(params):
                 # these images don't have to be distributed w/ the add-on, if they're not needed).
                 # After they're downloaded, the images exist in Kodi's image cache folders.
                 THUMBS_BASEURL = 'https://doko-desuka.github.io/128h/'
-                artDict = {'thumb': None}
+                artDict = {'thumb': None, 'fanart': ADDON_FANART}
                 miscItem = None
                 for sectionName in sorted(catalog.keys()):
                     if catalog[sectionName]:
@@ -198,7 +275,7 @@ def actionCatalogSection(params):
     # Items in these catalogs link to the video player pages already.
     isSpecial = (
         path in {URL_PATHS['ova'], URL_PATHS['movies'], URL_PATHS['latest']}
-        or params.get('searchType', 'series') not in {'series', 'genres'} # not series = movies or episodes search
+        or params.get('searchType', 'series') != 'series' # not series = movies or episodes search
     )
 
     if isSpecial:
@@ -212,7 +289,7 @@ def actionCatalogSection(params):
     if path != URL_PATHS['latest'] or not ADDON_LATEST_THUMBS:
         artDict = {'icon': thumb, 'thumb': thumb, 'poster': thumb} if thumb else None
     else:
-        artDict = {'icon': thumb, 'thumb': 'DefaultVideo.png', 'poster': 'DefaultVideo.png'} if thumb else None
+        artDict = {'icon': thumb, 'thumb': 'DefaultVideo.png', 'poster': 'DefaultVideo.png', 'fanart': thumb} if thumb else None
 
     # Persistent property with item metadata, used with the "Show Information" context menu.
     infoItems = getWindowProperty(PROPERTY_INFO_ITEMS) or { }
@@ -257,7 +334,7 @@ def actionCatalogSection(params):
                 entryURL = entry[0]
                 if entryURL in infoItems:
                     itemPlot, itemThumb = infoItems[entryURL]
-                    entryArt = {'icon': ADDON_ICON, 'thumb': itemThumb, 'poster': itemThumb}
+                    entryArt = {'icon': ADDON_ICON, 'thumb': itemThumb, 'poster': itemThumb, 'fanart': itemThumb}
                     yield (
                         buildURL({'action': action, 'url': entryURL}),
                         listItemFunc(entry[1], entryURL, entryArt, itemPlot, isFolder, isSpecial, None),
@@ -280,14 +357,26 @@ def actionEpisodesMenu(params):
 
     # Memory-cache the last episode list, to help when the user goes back and forth while watching
     # multiple episodes of the same show. This way only one web request is needed for the same show.
+    URLCache = getWindowProperty(PROPERTY_URL_CACHE)
+    URLCacheQuote = getWindowProperty(PROPERTY_URL_CACHE_QUOTE)
+    if not URLCache: URLCache = {}
+    if not URLCacheQuote: URLCacheQuote = {}
+    
     lastListURL = getRawWindowProperty(PROPERTY_EPISODE_LIST_URL)
     if lastListURL and lastListURL == params['url']:
         listData = getWindowProperty(PROPERTY_EPISODE_LIST_DATA)
     else:
+        URLCache = {}
+        URLCacheQuote = {}
         # New domain safety replace, in case the user is coming in from an old Kodi favorite item.
-        url = params['url'].replace('watchcartoononline.io', 'wcofun.com', 1)
-        r = requestHelper(url if url.startswith('http') else BASEURL + url)
-        html = r.text
+        if BASEURL == 'https://www.wcofun.net':
+           url = params['url'].replace('user.wco.tv', 'www.wcofun.net', 1)
+           r = requestHelper(url if url.startswith('http') else BASEURL + url)
+           html = r.text
+        else:
+           url = params['url'].replace('www.wcofun.net', 'user.wco.tv', 1)
+           r = requestHelper(url if url.startswith('http') else BASEURL + url)
+           html = r.text
 
         plot, thumb = getPageMetadata(html)
 
@@ -301,7 +390,7 @@ def actionEpisodesMenu(params):
             plot,
             tuple(
                 match.groups()
-                for match in re.finditer(
+                for match in finditer(
                     '''<a href="([^"]+).*?>([^<]+)''', html[dataStartIndex : html.find('"sidebar-all"')]
                 )
             )
@@ -315,7 +404,7 @@ def actionEpisodesMenu(params):
 
         showURL = params['url']
         thumb = listData[0]
-        artDict = {'icon': thumb, 'thumb': thumb, 'poster': thumb} if thumb else None
+        artDict = {'icon': thumb, 'thumb': thumb, 'poster': thumb, 'fanart': thumb} if thumb else None
         plot = listData[1]
 
         listItemFunc = makeListItemClean if ADDON.getSetting('cleanupEpisodes') == 'true' else makeListItem
@@ -323,15 +412,20 @@ def actionEpisodesMenu(params):
         itemParams = {'action': 'actionResolve', 'url': None}
         listIter = iter(listData[2]) if ADDON.getSetting('reverseEpisodes') == 'true' else reversed(listData[2])
         for URL, title in listIter:
-            item = listItemFunc(title, URL, artDict, plot, isFolder=False, isSpecial=False, oldParams=None)
+            item = listItemFunc(title, URL, artDict, plot, isFolder=False, isSpecial=False, oldParams=None, URLCacheQuote=URLCacheQuote)
             itemParams['url'] = URL
-            itemURL = buildURL(itemParams)
+            if URL in URLCache:
+                itemURL = URLCache[URL]
+            else:
+                itemURL = buildURL(itemParams)
+                URLCache[URL] = itemURL
             playlist.add(itemURL, item)
             yield (itemURL, item, False)
 
     xbmcplugin.addDirectoryItems(PLUGIN_ID, tuple(_episodeItemsGen()))
     xbmcplugin.endOfDirectory(PLUGIN_ID)
-
+    setWindowProperty(PROPERTY_URL_CACHE, URLCache)
+    setWindowProperty(PROPERTY_URL_CACHE_QUOTE, URLCacheQuote)
 
 def actionLatestMoviesMenu(params):
     # Returns a list of links from a hidden "/anime/movies" area.
@@ -352,12 +446,12 @@ def actionLatestMoviesMenu(params):
     infoItems = getWindowProperty(PROPERTY_INFO_ITEMS) or { }
 
     def _movieItemsGen():
-        artDict = {'icon': ADDON_ICON, 'thumb': ADDON_ICON, 'poster': ADDON_ICON}
-        reIter = re.finditer(
+        artDict = {'icon': ADDON_ICON, 'thumb': ADDON_ICON, 'poster': ADDON_ICON, 'fanart': ADDON_FANART}
+        reIter = finditer(
             '''<a href="([^"]+).*?>([^<]+)''', html[dataStartIndex : html.find('"sidebar-all"')]
         )
         # The page has like 6000 items going back to 2010, so we limit to only the latest 200.
-        for x in range(200):
+        for x in xrange(200):
             entryURL, entryTitle = next(reIter).groups()
             if entryURL in infoItems:
                 entryPlot, entryThumb = infoItems[entryURL]
@@ -366,11 +460,11 @@ def actionLatestMoviesMenu(params):
                     makeListItem(
                         unescapeHTMLText(entryTitle),
                         entryURL,
-                        {'icon': ADDON_ICON, 'thumb': entryThumb, 'poster': entryThumb},
+                        {'icon': ADDON_ICON, 'thumb': entryThumb, 'poster': entryThumb, 'fanart': ADDON_FANART},
                         entryPlot,
                         isFolder = False,
                         isSpecial = True,
-                        oldParams = None
+                        oldParams = params
                     ),
                     False
                 )
@@ -539,14 +633,14 @@ def actionGenresMenu(params):
                 buildURL(
                     {
                         'action': 'actionCatalogMenu',
-                        'path': '/search-by-genre/page/' + match.group(1).rsplit('/', 1)[1],
+                        'path': '/search-by-genre/' + match.group(1).rsplit('/', 1)[1],
                         'searchType': 'genres'
                     }
                 ),
                 xbmcgui.ListItem(match.group(2)),
                 True
             )
-            for match in re.finditer('''<a.*?"([^"]+).*?>(.*?)</''', html[dataStartIndex : html.find(r'</div></div>')])
+            for match in finditer('''<a.*?"([^"]+).*?>(.*?)</''', html[dataStartIndex : html.find(r'</div></div>')])
         )
     )
     xbmcplugin.endOfDirectory(PLUGIN_ID)
@@ -767,6 +861,22 @@ def actionUpdateFavourites(params):
     else:
         xbmcgui.Dialog().ok('WatchNixtoons2', 'Finished. No old favorites found.')
 
+#Added by Christian Haitian
+def actionClearCookies(params):
+    if not xbmcgui.Dialog().yesno(
+        'WatchNixtoons2',
+        'This will clear the stored cookies for WatchNixToons2 Premimum site.  Do this if you entered  ' \
+        'wrong credentials and attempted to use the plugin or recently changed your credentials.\nProceed?',
+        nolabel = 'Cancel',
+        yeslabel = 'Ok'
+    ):
+        return
+
+    # Action called from the settings dialog.
+    # Clear stored cookie file from addon folder.
+
+    os.remove(cookieFile)
+    xbmcgui.Dialog().ok('WatchNixtoons2', 'Successfully cleared cookies.')
 
 def actionShowSettings(params):
     # Modal dialog, so the program won't continue from this point until user closes\confirms it.
@@ -792,7 +902,7 @@ def getPageMetadata(html):
     # If we're on an episode or (old) movie page, see if there's a parent page with the actual metadata.
     stringStartIndex = html.find('"header-tag"')
     if stringStartIndex != -1:
-        parentURL = re.search('href="([^"]+)', html[stringStartIndex:]).group(1)
+        parentURL = search('href="([^"]+)', html[stringStartIndex:]).group(1)
         if '/anime/movies' not in parentURL:
             r = requestHelper(parentURL if parentURL.startswith('http') else BASEURL + parentURL)
             if r.ok:
@@ -806,14 +916,19 @@ def getPageMetadata(html):
         if thumbPath:
             if thumbPath.startswith('http'):
                 thumb = thumbPath + getThumbnailHeaders()
+            elif thumbPath.startswith('//'):
+                thumb = 'https:' + thumbPath + getThumbnailHeaders()
             elif thumbPath.startswith('/'):
                 thumb = BASEURL + thumbPath + getThumbnailHeaders()
+
+    # animationexplore seems more reliable
+    thumb = thumb.replace( BASEURL + '/wp-content', 'https://cdn.animationexplore.com' )
 
     # (Show) plot scraping.
     plot = ''
     stringStartIndex = html.find('Info:')
     if stringStartIndex != -1:
-        match = re.search('</h3>\s*<p>(.*?)</p>', html[stringStartIndex:], re.DOTALL)
+        match = search('</h3>\s*<p>(.*?)</p>', html[stringStartIndex:], DOTALL)
         plot = unescapeHTMLText(match.group(1).strip()) if match else ''
 
     return plot, thumb
@@ -841,12 +956,13 @@ def actionShowInfo(params):
 
 
 def unescapeHTMLText(text):
+    # text = text.encode('utf-8') if isinstance(text, unicode) else unicode(text, errors='ignore').encode('utf-8')
     if isinstance(text, six.text_type) and six.PY2:
         text = text.encode('utf-8')
     # Unescape HTML entities.
     if r'&#' in text:
         # Strings found by regex-searching on all lists in the source website. It's very likely to only be these.
-        return text.replace(r'&#8216;', '‘').replace(r'&#8221;', '”').replace(r'&#8211;', '–').replace(r'&#038;', '&')\
+        return text.replace(r'&#8216;', '‘').replace(r'&#8221;', '”').replace(r'&#8211;', '-').replace(r'&#038;', '&')\
         .replace(r'&#8217;', '’').replace(r'&#8220;', '“').replace(r'&#8230;', '…').replace(r'&#160;', ' ')\
         .replace(r'&amp;', '&')
     else:
@@ -883,8 +999,8 @@ def getTitleInfo(unescapedTitle):
         spaceIndex = unescapedTitle.find(' ', episodeIndex+9)
         if spaceIndex > episodeIndex:
             episodeSplit = unescapedTitle[episodeIndex+9 : spaceIndex].split('-') # For multipart episodes, like "42-43".
-            episode = filter(str.isdigit, episodeSplit[0])
-            multiPart = filter(str.isdigit, episodeSplit[1]) if len(episodeSplit) > 1 else None
+            episode = ''.join(filter(str.isdigit, episodeSplit[0]))
+            multiPart = ''.join(filter(str.isdigit, episodeSplit[1])) if len(episodeSplit) > 1 else None
 
             # Get the episode title string (stripped of spaces, hyphens and en-dashes).
             englishIndex = unescapedTitle.rfind(' English', spaceIndex)
@@ -906,7 +1022,7 @@ def getTitleInfo(unescapedTitle):
             return (unescapedTitle.strip(' -'), None, None, None, '')
 
 
-def makeListItem(title, url, artDict, plot, isFolder, isSpecial, oldParams):
+def makeListItem(title, url, artDict, plot, isFolder, isSpecial, oldParams, URLCacheQuote=None):
     unescapedTitle = unescapeHTMLText(title)
     item = xbmcgui.ListItem(unescapedTitle)
     isPlayable = False
@@ -946,9 +1062,15 @@ def makeListItem(title, url, artDict, plot, isFolder, isSpecial, oldParams):
         ]
     if isPlayable:
         item.setProperty('IsPlayable', 'true') # Allows the checkmark to be placed on watched episodes.
+        if URLCacheQuote and url in URLCacheQuote:
+            parsedURL = URLCacheQuote[url]
+        else:
+            parsedURL = urllib_parse.quote_plus(url)
+            if parsedURL is None:
+                URLCacheQuote[url] = parsedURL
         playChaptersItem = (
             'Play Chapters',
-            'PlayMedia('+PLUGIN_URL+'?action=actionResolve&url='+urllib_parse.quote_plus(url)+'&playChapters=1)'
+            'PlayMedia('+PLUGIN_URL+'?action=actionResolve&url='+parsedURL+'&playChapters=1)'
         )
         if contextMenuList:
             contextMenuList.append(playChaptersItem)
@@ -961,7 +1083,7 @@ def makeListItem(title, url, artDict, plot, isFolder, isSpecial, oldParams):
 
 
 # Variant of the 'makeListItem()' function that tries to format the item label using the season and episode.
-def makeListItemClean(title, url, artDict, plot, isFolder, isSpecial, oldParams):
+def makeListItemClean(title, url, artDict, plot, isFolder, isSpecial, oldParams, URLCacheQuote=None):
     unescapedTitle = unescapeHTMLText(title)
     isPlayable = False
 
@@ -972,16 +1094,6 @@ def makeListItemClean(title, url, artDict, plot, isFolder, isSpecial, oldParams)
             item.setInfo('video', {'mediatype': 'video', 'title': unescapedTitle})
     else:
         title, season, episode, multiPart, episodeTitle = getTitleInfo(unescapedTitle)
-
-        #dirty way to ensure is a string
-        if six.PY3:
-            if episode:
-                episode = "".join(episode)
-            if season:
-                season = "".join(season)
-            if multiPart:
-                multiPart = "".join(multiPart)
-
         if episode and episode.isdigit():
             # The clean episode label will have this format: "SxEE Episode Name", with S and EE standing for digits.
             item = xbmcgui.ListItem(
@@ -1057,16 +1169,20 @@ def catalogFromIterable(iterable):
 
 
 def makeLatestCatalog(params):
-    # Returns a list of links from the "Latest 50 Releases" area
-    r = requestHelper(BASEURL_ALT + '/last-50-recent-release')
+    # Returns a list of links from the "Latest 50 Releases" area, but from their mobile site as it has lots of items.
+    r = requestHelper(BASEURL_ALT + '/last-50-recent-release') # Path unused, data is already on the homepage.
     html = r.text
+
+    #The following lines are to be used for testing purposes only
+    #with open('outputerror.txt', 'w') as f:
+        #for p in html:
+            #f.write(str(p))
 
     dataStartIndex = html.find('fourteen columns')
     if dataStartIndex == -1:
         raise Exception('Latest catalog scrape fail')
 
-    #latest now using external site
-    #thumbHeaders = getThumbnailHeaders()
+    thumbHeaders = getThumbnailHeaders()
 
     if ADDON_LATEST_DATE:
         # Make the catalog dict only have a single section, "LATEST", with items listed as they are.
@@ -1074,7 +1190,7 @@ def makeLatestCatalog(params):
         return {
             'LATEST': tuple(
                 (match.group(1), match.group(3), "https:" + match.group(2))
-                for match in re.finditer(
+                for match in finditer(
                     r'''<div class=\"img\">\s+?<a href=\"([^\"]+)\">\s+?<img class=\"hover-img1\" src=\"([^\"]+)\">\s+?</a>\s+?</div>\s+?<div class=\"recent-release-episodes\"><a href=\".*?\" rel=\"bookmark\">(.*?)</a''', html[dataStartIndex : html.find('</ul>', dataStartIndex)]
                 )
             )
@@ -1082,7 +1198,7 @@ def makeLatestCatalog(params):
     else:
         return catalogFromIterable(
             (match.group(1), match.group(3), "https:" + match.group(2))
-            for match in re.finditer(
+            for match in finditer(
                 r'''<div class=\"img\">\s+?<a href=\"([^\"]+)\">\s+?<img class=\"hover-img1\" src=\"([^\"]+)\">\s+?</a>\s+?</div>\s+?<div class=\"recent-release-episodes\"><a href=\".*?\" rel=\"bookmark\">(.*?)</a''', html[dataStartIndex : html.find('</ul>', dataStartIndex)]
             )
         )
@@ -1098,7 +1214,7 @@ def makePopularCatalog(params):
 
     return catalogFromIterable(
         match.groups()
-        for match in re.finditer(
+        for match in finditer(
             '''<a href="([^"]+).*?>([^<]+)''', html[dataStartIndex : html.find('</div>', dataStartIndex)]
         )
     )
@@ -1115,7 +1231,7 @@ def makeSeriesSearchCatalog(params):
 
     return catalogFromIterable(
         match.groups()
-        for match in re.finditer(
+        for match in finditer(
             '''<a href="([^"]+)[^>]*>([^<]+)</a''',
             html[dataStartIndex : html.find('cizgiyazisi', dataStartIndex)]
         )
@@ -1135,7 +1251,7 @@ def makeMoviesSearchCatalog(params):
 
     return catalogFromIterable(
         match.groups()
-        for match in re.finditer(
+        for match in finditer(
             '''<a href="([^"]+).*?>([^<]+)''', html[dataStartIndex : html.find('/ul></ul', dataStartIndex)]
         )
         if lowerQuery in match.group(2).lower()
@@ -1154,10 +1270,10 @@ def makeEpisodesSearchCatalog(params):
 
     return catalogFromIterable(
         match.groups()
-        for match in re.finditer(
+        for match in finditer(
             '''<a href="([^"]+)[^>]*>([^<]+)</a''',
             html[dataStartIndex : html.find('cizgiyazisi', dataStartIndex)],
-            re.DOTALL
+            DOTALL
         )
     )
 
@@ -1173,7 +1289,7 @@ def makeSearchCatalog(params):
 
 
 def makeGenericCatalog(params):
-    # The movies path is missing some items when scraped from BASEURL_ALT, so we use the BASEURL
+    # The movies path is missing some items when scraped from BASEURL_MOBILE, so we use the BASEURL
     # (full website) in here.
     r = requestHelper(BASEURL + params['path'])
     html = r.text
@@ -1184,7 +1300,7 @@ def makeGenericCatalog(params):
 
     return catalogFromIterable(
         match.groups()
-        for match in re.finditer(
+        for match in finditer(
             '''<li><a href="([^"]+).*?>([^<]+)''', html[dataStartIndex : html.find('</div>', dataStartIndex)]
         )
     )
@@ -1224,13 +1340,14 @@ def getCatalogProperty(params):
             catalog = _rebuildCatalog()
     return catalog
 
-
 def actionResolve(params):
+#Mod by Christian Haitian starts here
+   if BASEURL == 'https://user.wco.tv':
     # Needs to be the BASEURL domain to get multiple video qualities.
     url = params['url']
     # Sanitize the URL since on some occasions it's a path instead of full address.
     url = url if url.startswith('http') else (BASEURL + (url if url.startswith('/') else '/' + url))
-    r = requestHelper(url.replace('watchcartoononline.io', 'wcofun.com', 1)) # New domain safety replace.
+    r = requestHelper(url.replace('watchcartoononline.io', 'user.wco.tv', 1)) # New domain safety.
     content = r.content
 
     if six.PY3:
@@ -1239,25 +1356,24 @@ def actionResolve(params):
     def _decodeSource(subContent):
         if six.PY3:
             subContent = str(subContent)
-        chars = subContent[subContent.find('[') : subContent.find(']')]
-        spread = int(re.search(r' - (\d+)\)\; }', subContent[subContent.find(' - '):]).group(1))
-        xbmc.log( chars, level=xbmc.LOGINFO )
-        xbmc.log( str(spread), level=xbmc.LOGINFO )
-        iframe = ''.join(
-            chr(
-                int(''.join(c for c in str(b64decode(char)) if c.isdigit())) - spread
-            )
-            for char in chars.replace('"', '').split(',')
-        )
+        # All links in premium site seem to start with file, we'll search for those in the content
+        demlinks = findall(r" src: '(.*?)'",str(subContent))
+
         try:
-            return BASEURL + re.search(r'src="([^"]+)', iframe).group(1)
+            return demlinks
+
         except:
             return None # Probably a temporary block, or change in embedded code.
 
+#    premiumlinks = findall(r'file: "(.*?)"',str(content))
+
     embedURL = None
 
-    # On rare cases an episode might have several "chapters", which are video players on the page.
-    embedURLPattern = r'onclick="myFunction'
+    if six.PY3:
+        embedURLPattern = b'onclick="myFunction'.decode('utf-8')
+    else:
+        embedURLPattern = b'onclick="myFunction'
+
     embedURLIndex = content.find(embedURLPattern)
     if 'playChapters' in params or ADDON.getSetting('chapterEpisodes') == 'true':
         # Multi-chapter episode found (that is, multiple embedURLPattern statements found).
@@ -1271,14 +1387,559 @@ def actionResolve(params):
 
         # If more than one "embedURL" statement found, make a selection dialog and call them "chapters".
         if len(dataIndices) > 1:
-            if six.PY3:
+            selectedIndex = xbmcgui.Dialog().select(
+                'Select Chapter', ['Chapter '+str(n) for n in xrange(1, len(dataIndices)+1)]
+            )
+        else:
+            selectedIndex = 0
+
+        if selectedIndex == 0:
+         embedURL = findall(r'file: "(.*?)"',str(content))  
+        elif selectedIndex != -1:
+         embedURL = _decodeSource(content[dataIndices[selectedIndex]:])
+        else:
+            return # User cancelled the chapter selection.
+    else:
+        # Normal / single-chapter episode.
+        embedURL = findall(r'file: "(.*?)"',str(content))  
+        # User asked to play multiple chapters, but only one chapter/video player found.
+        if embedURL and 'playChapters' in params:
+            xbmcgui.Dialog().notification('WatchNixtoons2', 'Only 1 chapter found...', ADDON_ICON, 2000, False)
+
+    premiumlinks = embedURL
+    mediaURL = None
+
+    if len(premiumlinks) == 1: # Only one quality available.
+        mediaURL = premiumlinks[0]
+    elif len(premiumlinks) > 0:
+        # Allows user to select a prefered quality and double checks if the link is live.  If not, use the other link instead
+        try:
+            premiumlinks0 = head(str(premiumlinks[0]), headers={'User-Agent': WNT2_USER_AGENT, 'Verifypeer': 'false', 'Referer': BASEURL + '/'}, timeout=10, allow_redirects=True)
+        except exceptions.RequestException as error:
+            premiumlinks0 = error
+        try:
+            premiumlinks1 = head(str(premiumlinks[1]), headers={'User-Agent': WNT2_USER_AGENT, 'Verifypeer': 'false', 'Referer': BASEURL + '/'}, timeout=10, allow_redirects=True)
+        except exceptions.RequestException as error:
+            premiumlinks1 = error
+
+        playbackMethod = ADDON.getSetting('playbackMethod')
+        if playbackMethod == '0': # Select quality.
                 selectedIndex = xbmcgui.Dialog().select(
-                    'Select Chapter', ['Chapter '+str(n) for n in range(1, len(dataIndices)+1)]
+                    'Select Quality', ['SD', 'HD']
                 )
+                if selectedIndex == 1:
+                    mediaURL = premiumlinks[0] if premiumlinks0 == 'Response [200]' else premiumlinks[1]
+                elif selectedIndex == -1:
+                    mediaURL = None
+                else:
+                    mediaURL = premiumlinks[1] if premiumlinks1 == 'Response [200]' else premiumlinks[0]
+        else: # Auto-play user choice.
+            if playbackMethod == '0':
+             mediaURL = premiumlinks[1] if str(premiumlinks1) == '<Response [200]>' else premiumlinks[0]
             else:
-                selectedIndex = xbmcgui.Dialog().select(
-                    'Select Chapter', ['Chapter '+str(n) for n in xrange(1, len(dataIndices)+1)]
-                )
+             mediaURL = premiumlinks[0] if str(premiumlinks0) == '<Response [200]>' else premiumlinks[1]
+
+    else: #Check free site in case of a new release that's not on the premium site yet.
+     xbmcgui.Dialog().notification('Trying free stream', '')
+     r = requestHelper(url.replace('user.wco.tv', 'www.wcofun.net', 1)) # Change from premium site to free site
+     content = r.content
+
+     def _decodeSource(subContent):
+        if six.PY3:
+            subContent = str(subContent)
+        chars = subContent[subContent.find('[') : subContent.find(']')]
+        spread = int(search(r' - (\d+)\)\; }', subContent[subContent.find(' - '):]).group(1))
+        iframe = ''.join(
+            chr(
+                int(''.join(c for c in str(b64decode(char)) if c.isdigit())) - spread
+            )
+            for char in chars.replace('"', '').split(',')
+        )
+        try:
+            return BASEURL + search(r'src="([^"]+)', iframe).group(1)
+        except:
+            return None # Probably a temporary block, or change in embedded code.
+
+     embedURL = None
+
+     # On rare cases an episode might have several "chapters", which are video players on the page.
+     embedURLPattern = b'onclick="myFunction'
+     embedURLIndex = content.find(embedURLPattern)
+     if 'playChapters' in params or ADDON.getSetting('chapterEpisodes') == 'true':
+        # Multi-chapter episode found (that is, multiple embedURLPattern statements found).
+        # Extract all chapters from the page.
+        embedURLPatternLen = len(embedURLPattern)
+        currentPlayerIndex = embedURLIndex
+        dataIndices = [ ]
+        while currentPlayerIndex != -1:
+            dataIndices.append(currentPlayerIndex)
+            currentPlayerIndex = content.find(embedURLPattern, currentPlayerIndex + embedURLPatternLen)
+
+        # If more than one "embedURL" statement found, make a selection dialog and call them "chapters".
+        if len(dataIndices) > 1:
+            selectedIndex = xbmcgui.Dialog().select(
+                'Select Chapter', ['Chapter '+str(n) for n in xrange(1, len(dataIndices)+1)]
+            )
+        else:
+            selectedIndex = 0
+
+        if selectedIndex != -1:
+            embedURL = _decodeSource(content[dataIndices[selectedIndex]:])
+        else:
+            return # User cancelled the chapter selection.
+     else:
+        # Normal / single-chapter episode.
+        embedURL = _decodeSource(content[embedURLIndex:])
+        # User asked to play multiple chapters, but only one chapter/video player found.
+        if embedURL and 'playChapters' in params:
+            xbmcgui.Dialog().notification('WatchNixtoons2', 'Only 1 chapter found...', ADDON_ICON, 2000, False)
+
+     # Handle temporary blocks / failures.
+     if not embedURL:
+        if 'high volume of requests' in content:
+            xbmcgui.Dialog().ok(
+                'WatchNixtoons2 Fail (Server Response)',
+                '"We are getting extremely high volume of requests on our video servers so that we temporarily block for free videos for free users. I apologize for the inconvenience."'
+            )
+        return
+
+     # Request the embedded player page.
+     r2 = requestHelper(unescapeHTMLText(embedURL)) # Sometimes a '&#038;' symbol is present in this URL.
+     html = r2.text
+
+     # Find the stream URLs.
+     if 'getvid?evid' in html:
+        # Query-style stream getting.
+        sourceURL = search(r'"(/inc/embed/getvidlink[^"]+)', html, DOTALL).group(1)
+
+        # Inline code similar to 'requestHelper()'.
+        # The User-Agent for this next request is somehow encoded into the media tokens, so we make sure to use
+        # the EXACT SAME value later, when playing the media, or else we get a HTTP 404 / 500 error.
+        r3 = requestHelper(
+            BASEURL + sourceURL,
+            data = None,
+            extraHeaders = {
+                'User-Agent': WNT2_USER_AGENT, 'Accept': '*/*', 'Referer': embedURL, 'X-Requested-With': 'XMLHttpRequest'
+            }
+        )
+        if not r3.ok:
+            raise Exception('Sources XMLHttpRequest request failed')
+        jsonData = r3.json()
+
+        # Only two qualities are ever available: 480p ("SD") and 720p ("HD").
+        sourceURLs = [ ]
+        sdToken = jsonData.get('enc', '')
+        hdToken = jsonData.get('hd', '')
+        sourceBaseURL = jsonData.get('server', '') + '/getvid?evid='
+        if sdToken:
+            sourceURLs.append(('480 (SD)', sourceBaseURL + sdToken)) # Order the items as (LABEL, URL).
+        if hdToken:
+            sourceURLs.append(('720 (HD)', sourceBaseURL + hdToken))
+        # Use the same backup stream method as the source: cdn domain + SD stream.
+        backupURL = jsonData.get('cdn', '') + '/getvid?evid=' + (sdToken or hdToken)
+     else:
+        # Alternative video player page, with plain stream links in the JWPlayer javascript.
+        sourcesBlock = search('sources:\s*?\[(.*?)\]', html, DOTALL).group(1)
+        streamPattern = compile('\{\s*?file:\s*?"(.*?)"(?:,\s*?label:\s*?"(.*?)")?')
+        sourceURLs = [
+            # Order the items as (LABEL (or empty string), URL).
+            (sourceMatch.group(2), sourceMatch.group(1))
+            for sourceMatch in streamPattern.finditer(sourcesBlock)
+        ]
+        # Use the backup link in the 'onError' handler of the 'jw' player.
+        backupMatch = streamPattern.search(html[html.find(b'jw.onError'):])
+        backupURL = backupMatch.group(1) if backupMatch else ''
+
+     mediaURL = None
+     if len(sourceURLs) >= 1: # Just want the SD quality as server may be busy.
+        mediaURL = sourceURLs[0][1]
+#     elif len(sourceURLs) > 0:
+        # Always force "select quality" for now.
+#        playbackMethod = ADDON.getSetting('playbackMethod')
+#        if playbackMethod == '0': # Select quality.
+#                selectedIndex = xbmcgui.Dialog().select(
+#                    'Select Quality', [(sourceItem[0] or '?') for sourceItem in sourceURLs]
+#                )
+#                if selectedIndex != -1:
+#                    mediaURL = sourceURLs[selectedIndex][1]
+#        else: # Auto-play user choice.
+#            sortedSources = sorted(sourceURLs)
+#            mediaURL = sortedSources[-1][1] if playbackMethod == '1' else sortedSources[0][1]
+#        mediaURL = sourceURLs[0][1]
+
+     if mediaURL:
+        # Kodi headers for playing web streamed media.
+        global MEDIA_HEADERS
+        if not MEDIA_HEADERS:
+            MEDIA_HEADERS = {
+                'User-Agent': WNT2_USER_AGENT,
+                'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5',
+                'Connection': 'keep-alive',
+                'Verifypeer': 'false',
+                'Referer': BASEURL + '/'
+            }
+
+        # Try to un-redirect the chosen media URL.
+        # If it fails, try to un-resolve the backup URL. If not even the backup URL is working, abort playing.
+        mediaHead = solveMediaRedirect(mediaURL, MEDIA_HEADERS)
+        if not mediaHead:
+            mediaHead = solveMediaRedirect(backupURL, MEDIA_HEADERS)
+        if not mediaHead:
+            return xbmcplugin.setResolvedUrl(PLUGIN_ID, False, xbmcgui.ListItem())
+
+        # Need to use the exact same ListItem name & infolabels when playing or else Kodi replaces that item
+        # in the UI listing.
+        item = xbmcgui.ListItem(xbmc.getInfoLabel('ListItem.Label'))
+        item.setPath(mediaHead.url + '|' + '&'.join(key+'='+urllib_parse.quote_plus(val) for key, val in MEDIA_HEADERS.items()))
+        item.setMimeType(mediaHead.headers.get('Content-Type', 'video/mp4')) # Avoids Kodi's MIME request.
+
+        # When coming in from a Favourite item, there will be no metadata. Try to get at least a title.
+        itemTitle = xbmc.getInfoLabel('ListItem.Title')
+        if not itemTitle:
+            if six.PY3:
+                match = search(b'<h1[^>]+>([^<]+)</h1'.decode('utf-8'), content)
+            else:
+                match = search(b'<h1[^>]+>([^<]+)</h1', content)
+
+            if match:
+                if six.PY3:
+                    itemTitle = str(match.group(1)).replace(' English Subbed', '', 1).replace( 'English Dubbed', '', 1)
+                else:
+                    itemTitle = match.group(1).replace(' English Subbed', '', 1).replace( 'English Dubbed', '', 1)
+            else:
+                itemTitle = ''
+
+        episodeString = xbmc.getInfoLabel('ListItem.Episode')
+        if episodeString != '' and episodeString != '-1':
+            seasonInfoLabel = xbmc.getInfoLabel('ListItem.Season')
+            item.setInfo('video',
+                {
+                    'tvshowtitle': xbmc.getInfoLabel('ListItem.TVShowTitle'),
+                    'title': itemTitle,
+                    'season': int(seasonInfoLabel) if seasonInfoLabel.isdigit() else -1,
+                    'episode': int(episodeString),
+                    'plot': xbmc.getInfoLabel('ListItem.Plot'),
+                    'mediatype': 'episode'
+                }
+            )
+        else:
+            item.setInfo('video',
+                {
+                    'title': itemTitle,
+                    'plot': xbmc.getInfoLabel('ListItem.Plot'),
+                    'mediatype': 'movie'
+                }
+            )
+
+        #xbmc.Player().play(listitem=item) # Alternative play method, lets you extend the Player class with your own.
+        xbmcplugin.setResolvedUrl(PLUGIN_ID, True, item)
+     else:
+		# Failed. No source found, or the user didn't select one from the dialog.
+        xbmcplugin.setResolvedUrl(PLUGIN_ID, False, xbmcgui.ListItem())
+
+    MEDIA_HEADERS = None
+    try:
+        premiumtest = head(mediaURL, headers={'User-Agent': WNT2_USER_AGENT, 'Verifypeer': 'false', 'Referer': BASEURL + '/'}, timeout=10, allow_redirects=True)
+    except exceptions.RequestException as error:
+        premiumtest = error
+#    premiumtest = head(mediaURL, timeout=1)
+    if str(premiumtest) == "<Response [200]>": #Test if the premium link is accessible if not, let's try the free version.
+        if not MEDIA_HEADERS:
+                MEDIA_HEADERS = {
+					'User-Agent': WNT2_USER_AGENT,
+					'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5',
+					'Connection': 'keep-alive',
+					'Verifypeer': 'false',
+					'Referer': BASEURL + '/'
+				}
+        mediaHead = solveMediaRedirect(mediaURL, MEDIA_HEADERS)
+        item = xbmcgui.ListItem(xbmc.getInfoLabel('ListItem.Label'))
+        item.setPath(mediaHead.url + '|' + '&'.join(key+'='+urllib_parse.quote_plus(val) for key, val in MEDIA_HEADERS.items()))
+        item.setMimeType(mediaHead.headers.get('Content-Type', 'video/mp4')) # Avoids Kodi's MIME request.
+			# When coming in from a Favourite item, there will be no metadata. Try to get at least a title.
+        itemTitle = xbmc.getInfoLabel('ListItem.Title')
+        if not itemTitle:
+            if six.PY3:
+                match = search(b'<h1[^>]+>([^<]+)</h1'.decode('utf-8'), content)
+            else:
+                match = search(b'<h1[^>]+>([^<]+)</h1', content)
+                
+            if match:
+                if six.PY3:
+                    itemTitle = str(match.group(1)).replace(' English Subbed', '', 1).replace( 'English Dubbed', '', 1)
+                else:
+                    itemTitle = match.group(1).replace(' English Subbed', '', 1).replace( 'English Dubbed', '', 1)
+            else:
+                itemTitle = ''
+
+        episodeString = xbmc.getInfoLabel('ListItem.Episode')
+        if episodeString != '' and episodeString != '-1':
+                seasonInfoLabel = xbmc.getInfoLabel('ListItem.Season')
+                item.setInfo('video',
+					{
+						'tvshowtitle': xbmc.getInfoLabel('ListItem.TVShowTitle'),
+						'title': itemTitle,
+						'season': int(seasonInfoLabel) if seasonInfoLabel.isdigit() else -1,
+						'episode': int(episodeString),
+						'plot': xbmc.getInfoLabel('ListItem.Plot'),
+						'mediatype': 'episode'
+					}
+				)
+        else:
+                item.setInfo('video',
+					{
+						'title': itemTitle,
+						'plot': xbmc.getInfoLabel('ListItem.Plot'),
+						'mediatype': 'movie'
+					}
+				)
+
+		#xbmc.Player().play(listitem=item) # Alternative play method, lets you extend the Player class with your own.
+        xbmcplugin.setResolvedUrl(PLUGIN_ID, True, item)
+    elif '/inc/embed' in content: #Premium link failed so we'll try the free version now.
+     xbmcgui.Dialog().notification('Trying free stream', '')
+     r = requestHelper(url.replace('user.wco.tv', 'www.wcofun.net', 1)) # Change from premium site to free site
+     content = r.content
+
+     def _decodeSource(subContent):
+        if six.PY3:
+            subContent = str(subContent)
+        chars = subContent[subContent.find('[') : subContent.find(']')]
+        spread = int(search(r' - (\d+)\)\; }', subContent[subContent.find(' - '):]).group(1))
+        iframe = ''.join(
+            chr(
+                int(''.join(c for c in str(b64decode(char)) if c.isdigit())) - spread
+            )
+            for char in chars.replace('"', '').split(',')
+        )
+        try:
+            return BASEURL + search(r'src="([^"]+)', iframe).group(1)
+        except:
+            return None # Probably a temporary block, or change in embedded code.
+
+     embedURL = None
+
+     # On rare cases an episode might have several "chapters", which are video players on the page.
+     embedURLPattern = b'onclick="myFunction'
+     embedURLIndex = content.find(embedURLPattern)
+     if 'playChapters' in params or ADDON.getSetting('chapterEpisodes') == 'true':
+        # Multi-chapter episode found (that is, multiple embedURLPattern statements found).
+        # Extract all chapters from the page.
+        embedURLPatternLen = len(embedURLPattern)
+        currentPlayerIndex = embedURLIndex
+        dataIndices = [ ]
+        while currentPlayerIndex != -1:
+            dataIndices.append(currentPlayerIndex)
+            currentPlayerIndex = content.find(embedURLPattern, currentPlayerIndex + embedURLPatternLen)
+
+        # If more than one "embedURL" statement found, make a selection dialog and call them "chapters".
+        if len(dataIndices) > 1:
+            selectedIndex = xbmcgui.Dialog().select(
+                'Select Chapter', ['Chapter '+str(n) for n in xrange(1, len(dataIndices)+1)]
+            )
+        else:
+            selectedIndex = 0
+
+        if selectedIndex != -1:
+            embedURL = _decodeSource(content[dataIndices[selectedIndex]:])
+        else:
+            return # User cancelled the chapter selection.
+     else:
+        # Normal / single-chapter episode.
+        embedURL = _decodeSource(content[embedURLIndex:])
+        # User asked to play multiple chapters, but only one chapter/video player found.
+        if embedURL and 'playChapters' in params:
+            xbmcgui.Dialog().notification('WatchNixtoons2', 'Only 1 chapter found...', ADDON_ICON, 2000, False)
+
+     # Handle temporary blocks / failures.
+     if not embedURL:
+        if 'high volume of requests' in content:
+            xbmcgui.Dialog().ok(
+                'WatchNixtoons2 Fail (Server Response)',
+                '"We are getting extremely high volume of requests on our video servers so that we temporarily block for free videos for free users. I apologize for the inconvenience."'
+            )
+        return
+
+     # Request the embedded player page.
+     r2 = requestHelper(unescapeHTMLText(embedURL)) # Sometimes a '&#038;' symbol is present in this URL.
+     html = r2.text
+
+     # Find the stream URLs.
+     if 'getvid?evid' in html:
+        # Query-style stream getting.
+        sourceURL = search(r'"(/inc/embed/getvidlink[^"]+)', html, DOTALL).group(1)
+
+        # Inline code similar to 'requestHelper()'.
+        # The User-Agent for this next request is somehow encoded into the media tokens, so we make sure to use
+        # the EXACT SAME value later, when playing the media, or else we get a HTTP 404 / 500 error.
+        r3 = requestHelper(
+            BASEURL + sourceURL,
+            data = None,
+            extraHeaders = {
+                'User-Agent': WNT2_USER_AGENT, 'Accept': '*/*', 'Referer': embedURL, 'X-Requested-With': 'XMLHttpRequest'
+            }
+        )
+        if not r3.ok:
+            raise Exception('Sources XMLHttpRequest request failed')
+        jsonData = r3.json()
+
+        # Only two qualities are ever available: 480p ("SD") and 720p ("HD").
+        sourceURLs = [ ]
+        sdToken = jsonData.get('enc', '')
+        hdToken = jsonData.get('hd', '')
+        sourceBaseURL = jsonData.get('server', '') + '/getvid?evid='
+        if sdToken:
+            sourceURLs.append(('480 (SD)', sourceBaseURL + sdToken)) # Order the items as (LABEL, URL).
+        if hdToken:
+            sourceURLs.append(('720 (HD)', sourceBaseURL + hdToken))
+        # Use the same backup stream method as the source: cdn domain + SD stream.
+        backupURL = jsonData.get('cdn', '') + '/getvid?evid=' + (sdToken or hdToken)
+     else:
+        # Alternative video player page, with plain stream links in the JWPlayer javascript.
+        sourcesBlock = search('sources:\s*?\[(.*?)\]', html, DOTALL).group(1)
+        streamPattern = compile('\{\s*?file:\s*?"(.*?)"(?:,\s*?label:\s*?"(.*?)")?')
+        sourceURLs = [
+            # Order the items as (LABEL (or empty string), URL).
+            (sourceMatch.group(2), sourceMatch.group(1))
+            for sourceMatch in streamPattern.finditer(sourcesBlock)
+        ]
+        # Use the backup link in the 'onError' handler of the 'jw' player.
+        backupMatch = streamPattern.search(html[html.find(b'jw.onError'):])
+        backupURL = backupMatch.group(1) if backupMatch else ''
+
+     mediaURL = None
+     if len(sourceURLs) >= 1: # Just want the SD quality as server may be busy.
+        mediaURL = sourceURLs[0][1]
+#     elif len(sourceURLs) > 0:
+        # Always force "select quality" for now.
+#        playbackMethod = ADDON.getSetting('playbackMethod')
+#        if playbackMethod == '0': # Select quality.
+#                selectedIndex = xbmcgui.Dialog().select(
+#                    'Select Quality', [(sourceItem[0] or '?') for sourceItem in sourceURLs]
+#                )
+#                if selectedIndex != -1:
+#                    mediaURL = sourceURLs[selectedIndex][1]
+#        else: # Auto-play user choice.
+#            sortedSources = sorted(sourceURLs)
+#            mediaURL = sortedSources[-1][1] if playbackMethod == '1' else sortedSources[0][1]
+#        mediaURL = sourceURLs[0][1]
+
+     if mediaURL:
+        # Kodi headers for playing web streamed media.
+        # global MEDIA_HEADERS
+        if not MEDIA_HEADERS:
+            MEDIA_HEADERS = {
+                'User-Agent': WNT2_USER_AGENT,
+                'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5',
+                'Connection': 'keep-alive',
+                'Verifypeer': 'false',
+                'Referer': BASEURL + '/'
+            }
+
+        # Try to un-redirect the chosen media URL.
+        # If it fails, try to un-resolve the backup URL. If not even the backup URL is working, abort playing.
+        mediaHead = solveMediaRedirect(mediaURL, MEDIA_HEADERS)
+        if not mediaHead:
+            mediaHead = solveMediaRedirect(backupURL, MEDIA_HEADERS)
+        if not mediaHead:
+            return xbmcplugin.setResolvedUrl(PLUGIN_ID, False, xbmcgui.ListItem())
+
+        # Need to use the exact same ListItem name & infolabels when playing or else Kodi replaces that item
+        # in the UI listing.
+        item = xbmcgui.ListItem(xbmc.getInfoLabel('ListItem.Label'))
+        item.setPath(mediaHead.url + '|' + '&'.join(key+'='+urllib_parse.quote_plus(val) for key, val in MEDIA_HEADERS.items()))
+        item.setMimeType(mediaHead.headers.get('Content-Type', 'video/mp4')) # Avoids Kodi's MIME request.
+
+        # When coming in from a Favourite item, there will be no metadata. Try to get at least a title.
+        itemTitle = xbmc.getInfoLabel('ListItem.Title')
+        if not itemTitle:
+            if six.PY3:
+                match = search(b'<h1[^>]+>([^<]+)</h1'.decode('utf-8'), content)
+            else:
+                match = search(b'<h1[^>]+>([^<]+)</h1', content)
+
+            if match:
+              if six.PY3:
+                  itemTitle = str(match.group(1)).replace(' English Subbed', '', 1).replace( 'English Dubbed', '', 1)
+              else:
+                  itemTitle = match.group(1).replace(' English Subbed', '', 1).replace( 'English Dubbed', '', 1)
+            else:
+                itemTitle = ''
+
+        episodeString = xbmc.getInfoLabel('ListItem.Episode')
+        if episodeString != '' and episodeString != '-1':
+            seasonInfoLabel = xbmc.getInfoLabel('ListItem.Season')
+            item.setInfo('video',
+                {
+                    'tvshowtitle': xbmc.getInfoLabel('ListItem.TVShowTitle'),
+                    'title': itemTitle,
+                    'season': int(seasonInfoLabel) if seasonInfoLabel.isdigit() else -1,
+                    'episode': int(episodeString),
+                    'plot': xbmc.getInfoLabel('ListItem.Plot'),
+                    'mediatype': 'episode'
+                }
+            )
+        else:
+            item.setInfo('video',
+                {
+                    'title': itemTitle,
+                    'plot': xbmc.getInfoLabel('ListItem.Plot'),
+                    'mediatype': 'movie'
+                }
+            )
+
+        #xbmc.Player().play(listitem=item) # Alternative play method, lets you extend the Player class with your own.
+        xbmcplugin.setResolvedUrl(PLUGIN_ID, True, item)
+    else:
+		# Failed. No source found, or the user didn't select one from the dialog.
+        xbmcplugin.setResolvedUrl(PLUGIN_ID, False, xbmcgui.ListItem())
+	
+#Mod by Christian Haitian ends here
+
+   else:
+        # Needs to be the BASEURL domain to get multiple video qualities.
+    url = params['url']
+    # Sanitize the URL since on some occasions it's a path instead of full address.
+    url = url if url.startswith('http') else (BASEURL + (url if url.startswith('/') else '/' + url))
+    r = requestHelper(url.replace('watchcartoononline.io', 'wcofun.net', 1)) # New domain safety.
+    content = r.content
+
+    def _decodeSource(subContent):
+        if six.PY3:
+            subContent = str(subContent)
+        chars = subContent[subContent.find('[') : subContent.find(']')]
+        spread = int(search(r' - (\d+)\)\; }', subContent[subContent.find(' - '):]).group(1))
+        iframe = ''.join(
+            chr(
+                int(''.join(c for c in str(b64decode(char)) if c.isdigit())) - spread
+            )
+            for char in chars.replace('"', '').split(',')
+        )
+        try:
+            return BASEURL + search(r'src="([^"]+)', iframe).group(1)
+        except:
+            return None # Probably a temporary block, or change in embedded code.
+
+    embedURL = None
+
+    # On rare cases an episode might have several "chapters", which are video players on the page.
+    embedURLPattern = b'onclick="myFunction'
+    embedURLIndex = content.find(embedURLPattern)
+    if 'playChapters' in params or ADDON.getSetting('chapterEpisodes') == 'true':
+        # Multi-chapter episode found (that is, multiple embedURLPattern statements found).
+        # Extract all chapters from the page.
+        embedURLPatternLen = len(embedURLPattern)
+        currentPlayerIndex = embedURLIndex
+        dataIndices = [ ]
+        while currentPlayerIndex != -1:
+            dataIndices.append(currentPlayerIndex)
+            currentPlayerIndex = content.find(embedURLPattern, currentPlayerIndex + embedURLPatternLen)
+
+        # If more than one "embedURL" statement found, make a selection dialog and call them "chapters".
+        if len(dataIndices) > 1:
+            selectedIndex = xbmcgui.Dialog().select(
+                'Select Chapter', ['Chapter '+str(n) for n in xrange(1, len(dataIndices)+1)]
+            )
         else:
             selectedIndex = 0
 
@@ -1287,38 +1948,29 @@ def actionResolve(params):
         else:
             return # User cancelled the chapter selection.
     else:
-        # back-up search index
-        if embedURLIndex <= 0:
-            embedURLPattern = r'class="episode-descp"'
-            embedURLIndex = content.find(embedURLPattern)
         # Normal / single-chapter episode.
         embedURL = _decodeSource(content[embedURLIndex:])
         # User asked to play multiple chapters, but only one chapter/video player found.
         if embedURL and 'playChapters' in params:
             xbmcgui.Dialog().notification('WatchNixtoons2', 'Only 1 chapter found...', ADDON_ICON, 2000, False)
 
-    # Notify a failure in solving the player obfuscation.
+    # Handle temporary blocks / failures.
     if not embedURL:
-        xbmcgui.Dialog().ok('WatchNixtoons2', 'Unable to find a playable source')
+        if 'high volume of requests' in content:
+            xbmcgui.Dialog().ok(
+                'WatchNixtoons2 Fail (Server Response)',
+                '"We are getting extremely high volume of requests on our video servers so that we temporarily block for free videos for free users. I apologize for the inconvenience."'
+            )
         return
 
     # Request the embedded player page.
     r2 = requestHelper(unescapeHTMLText(embedURL)) # Sometimes a '&#038;' symbol is present in this URL.
     html = r2.text
-    
-    # Notify about temporary blocks / failures.
-    if 'high volume of requests' in html:
-        xbmcgui.Dialog().ok(
-            'WatchNixtoons2 Fail (Server Response)',
-            '"We are getting extremely high volume of requests on our video servers so that we temporarily block for free videos for free users. I apologize for the inconvenience."'
-        )
-        return
 
     # Find the stream URLs.
     if 'getvid?evid' in html:
-
         # Query-style stream getting.
-        sourceURL = re.search(r'"(/inc/embed/getvidlink[^"]+)', html, re.DOTALL).group(1)
+        sourceURL = search(r'"(/inc/embed/getvidlink[^"]+)', html, DOTALL).group(1)
 
         # Inline code similar to 'requestHelper()'.
         # The User-Agent for this next request is somehow encoded into the media tokens, so we make sure to use
@@ -1347,8 +1999,8 @@ def actionResolve(params):
         backupURL = jsonData.get('cdn', '') + '/getvid?evid=' + (sdToken or hdToken)
     else:
         # Alternative video player page, with plain stream links in the JWPlayer javascript.
-        sourcesBlock = re.search('sources:\s*?\[(.*?)\]', html, re.DOTALL).group(1)
-        streamPattern = re.compile('\{\s*?file:\s*?"(.*?)"(?:,\s*?label:\s*?"(.*?)")?')
+        sourcesBlock = search('sources:\s*?\[(.*?)\]', html, DOTALL).group(1)
+        streamPattern = compile('\{\s*?file:\s*?"(.*?)"(?:,\s*?label:\s*?"(.*?)")?')
         sourceURLs = [
             # Order the items as (LABEL (or empty string), URL).
             (sourceMatch.group(2), sourceMatch.group(1))
@@ -1376,12 +2028,13 @@ def actionResolve(params):
 
     if mediaURL:
         # Kodi headers for playing web streamed media.
-        global MEDIA_HEADERS
+        # global MEDIA_HEADERS
         if not MEDIA_HEADERS:
             MEDIA_HEADERS = {
                 'User-Agent': WNT2_USER_AGENT,
                 'Accept': 'video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5',
-                #'Connection': 'keep-alive', # The source website uses HTTP/1.1, where this value is the default.
+                'Connection': 'keep-alive',
+                'Verifypeer': 'false',
                 'Referer': BASEURL + '/'
             }
 
@@ -1392,32 +2045,21 @@ def actionResolve(params):
             mediaHead = solveMediaRedirect(backupURL, MEDIA_HEADERS)
         if not mediaHead:
             return xbmcplugin.setResolvedUrl(PLUGIN_ID, False, xbmcgui.ListItem())
-            
-        # Enforce the add-on debug setting to use HTTP access on the stream.        
-        if ADDON.getSetting('useHTTP') == 'true':
-            # This is an attempt to fix the fact that, on newer Kodi versions, the debug log says that there
-            # was an SSL failure, with this line in the log (with debug logging activated):
-            # "ERROR: CCurlFile::Stat - Failed: SSL peer certificate or SSH remote key was not OK(60)"
-            streamURL = mediaHead.url.replace('https://', 'http://', 1)
-        else:
-            streamURL = mediaHead.url
 
         # Need to use the exact same ListItem name & infolabels when playing or else Kodi replaces that item
         # in the UI listing.
         item = xbmcgui.ListItem(xbmc.getInfoLabel('ListItem.Label'))
-        item.setPath(streamURL + '|' + '&'.join(key+'='+urllib_parse.quote_plus(val) for key, val in MEDIA_HEADERS.items()))
-        
-        # Disable Kodi's MIME-type request, since we already know what it is.
-        item.setMimeType(mediaHead.headers.get('Content-Type', 'video/mp4'))
-        item.setContentLookup(False)
+        item.setPath(mediaHead.url + '|' + '&'.join(key+'='+urllib_parse.quote_plus(val) for key, val in MEDIA_HEADERS.items()))
+        item.setMimeType(mediaHead.headers.get('Content-Type', 'video/mp4')) # Avoids Kodi's MIME request.
 
         # When coming in from a Favourite item, there will be no metadata. Try to get at least a title.
         itemTitle = xbmc.getInfoLabel('ListItem.Title')
         if not itemTitle:
-            match = re.search(r'<h1[^>]+>([^<]+)</h1', content)
+            match = search(b'<h1[^>]+>([^<]+)</h1', content)
+
             if match:
                 if six.PY3:
-                    itemTitle = str(match.group(1)).replace(' English Subbed', '', 1).replace( 'English Dubbed', '', 1)     
+                    itemTitle = str(match.group(1)).replace(' English Subbed', '', 1).replace( 'English Dubbed', '', 1)
                 else:
                     itemTitle = match.group(1).replace(' English Subbed', '', 1).replace( 'English Dubbed', '', 1)
             else:
@@ -1451,7 +2093,6 @@ def actionResolve(params):
         # Failed. No source found, or the user didn't select one from the dialog.
         xbmcplugin.setResolvedUrl(PLUGIN_ID, False, xbmcgui.ListItem())
 
-
 def buildURL(query):
     '''
     Helper function to build a Kodi xbmcgui.ListItem URL.
@@ -1474,36 +2115,39 @@ def xbmcDebug(*args):
     xbmc.log('WATCHNIXTOONS2 > ' + ' '.join((val if isinstance(val, str) else repr(val)) for val in args), xbmc.LOGWARNING)
 
 
+def simpleRequest(url, requestFunc, headers):
+    return requestFunc(url, headers=headers, verify=False, timeout=10)
+
+
 # Thumbnail HTTP headers for Kodi to use when grabbing thumbnail images.
 def getThumbnailHeaders():
     # Original code:
     #return (
-    #    '|User-Agent='+urllib_parse.quote_plus(WNT2_USER_AGENT)
-    #    + '&Accept='+urllib_parse.quote_plus('image/webp,*/*')
-    #    + '&Referer='+urllib_parse.quote_plus(BASEURL+'/')
+    #    '|User-Agent='+quote_plus(WNT2_USER_AGENT)
+    #    + '&Accept='+quote_plus('image/webp,*/*')
+    #    + '&Referer='+quote_plus(BASEURL+'/')
     #)
     cookieProperty = getRawWindowProperty(PROPERTY_SESSION_COOKIE)
     cookies = ('&Cookie=' + urllib_parse.quote_plus(cookieProperty)) if cookieProperty else ''
 
     # Since it's a constant value, it can be precomputed.
-    return '|User-Agent=Mozilla%2F5.0+%28compatible%3B+WatchNixtoons2%2F0.4.1%3B' \
-    '+%2Bhttps%3A%2F%2Fgithub.com%2Fdoko-desuka%2Fplugin.video.watchnixtoons2%29' \
-    '&Accept=image%2Fwebp%2C%2A%2F%2A&Referer=https%3A%2F%2Fwww.wcofun.com%2F' + cookies
+    return '|User-Agent='+urllib_parse.quote_plus(WNT2_USER_AGENT)
+    + '&Accept=image%2Fwebp%2C%2A%2F%2A&Referer='+urllib_parse.quote_plus(BASEURL+'/') + cookies
 
 
 def getOldDomains():
     # Old possible domains, in the order of likeliness.
     return (
-        'www.wcostream.com', 'm.wcostream.com', 'www.watchcartoononline.io', 'm.watchcartoononline.io', 'www.thewatchcartoononline.tv'
+        'www.thewatchcartoononline.tv', 'www.wcostream.com', 'm.wcostream.com', 'www.watchcartoononline.io', 'm.watchcartoononline.io'
     )
 
 
 def solveMediaRedirect(url, headers):
-    # Use (streamed, headers-only) GET requests to fulfill possible 3xx redirections.
-    # Returns the (headers-only) final response, or None.
-    while True:
+    # Use HEAD requests to fulfill possible 302 redirections.
+    # Returns the final stream HEAD response.
+    while 1:
         try:
-            mediaHead = s.get(
+            mediaHead = get(
                 url, stream=True, headers=headers, allow_redirects=False, verify=False, timeout=10
             )
             if 'Location' in mediaHead.headers:
@@ -1514,11 +2158,12 @@ def solveMediaRedirect(url, headers):
         except:
             return None # Return nothing on failure.
 
-
+#@functools.lru_cache(maxsize=128)
 def requestHelper(url, data=None, extraHeaders=None):
     myHeaders = {
         'User-Agent': WNT2_USER_AGENT,
         'Accept': 'text/html,application/xhtml+xml,application/xml,application/json;q=0.9,image/webp,*/*;q=0.8',
+        'Verifypeer': 'false',
         'Accept-Language': 'en-US,en;q=0.5',
         'Cache-Control': 'no-cache',
         'Pragma': 'no-cache',
@@ -1538,16 +2183,25 @@ def requestHelper(url, data=None, extraHeaders=None):
 
     status = 0
     i = -1
+
+#Mod by Christian Haitian starts here
     while status != 200 and i < 2:
-        if data:
+        if data and BASEURL == 'https://user.wco.tv':
+            response = session.post(url, data=data, headers=myHeaders, verify=False, timeout=10)
+        elif data and BASEURL == 'https://www.wcofun.net':
             response = s.post(url, data=data, headers=myHeaders, verify=False, cookies=cookieDict, timeout=10)
         else:
-            response = s.get(url, headers=myHeaders, verify=False, cookies=cookieDict, timeout=10)
+             if BASEURL == 'https://user.wco.tv': 
+                 response = session.get(url, headers=myHeaders, verify=False, timeout=10)
+             else:
+                 response = s.get(url, headers=myHeaders, verify=False, cookies=cookieDict, timeout=10)
         status = response.status_code
         if status != 200:
             i += 1
             if status == 403 and '1' == response.headers.get('CF-Chl-Bypass', ''):
-                s.mount(BASEURL, tls_adapters[i])
+               s.mount(url, tls_adapters[i])
+
+#Mod by Christian Haitian ends here
 
     # Store the session cookie(s), if any.
     if not cookieProperty and response.cookies:
