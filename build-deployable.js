@@ -1,12 +1,26 @@
 const fs = require("fs");
 const crypto = require("crypto");
 
-const zipLocal = require("zip-local");
+const axios = require("axios");
 
 const PREFIX = "./dist";
 
-const DATE = new Date();
-const VERSION = `${DATE.getFullYear()}.${DATE.getMonth()}.${DATE.getDate()}.${DATE.getHours() * 3600 + DATE.getMinutes() * 60 + DATE.getSeconds()}`;
+const download = async(url, path) => {
+    const writer = fs.createWriteStream(path);
+  
+    const response = await axios({
+        url,
+        method: "GET",
+        responseType: "stream"
+    });
+  
+    response.data.pipe(writer);
+  
+    return new Promise((resolve, reject) => {
+        writer.on("finish", resolve);
+        writer.on("error", reject);
+    });
+}
 
 if (fs.existsSync(PREFIX)) fs.rmSync(PREFIX, { recursive: true });
 fs.mkdirSync(PREFIX);
@@ -18,17 +32,33 @@ for (const staticFile of fs.readdirSync("./static")) {
 let addonsXmlContent = `<?xml version="1.0" encoding="UTF-8"?>
 <addons>`;
 
-for (const plugin of fs.readdirSync("./src").filter((folder) => folder.startsWith("plugin."))) {
-    const addonXml = fs.readFileSync(`./src/${plugin}/${plugin}/addon.xml`).toString();
+let plugins = {
+    "https://raw.githubusercontent.com/thecrewwh/zips/master/matrix/_zip/plugin.video.watchnixtoons2/": "plugin.video.watchnixtoons2"
+};
+
+let finished = 0;
+Object.entries(plugins).forEach(async (plugin) => {
+    const addonXml = (await axios.get(plugin[0] + "addon.xml")).data;
     addonsXmlContent += addonXml;
 
     const version = addonXml.match(/<addon .+ version="\S+"/)[0].match(/version="\S+"/)[0].replace("version=\"", "").replace("\"", "");
+    
+    fs.mkdirSync(`${PREFIX}/${plugin[1]}`);
 
-    fs.mkdirSync(`${PREFIX}/${plugin}`);
+    await download(`${plugin[0]}${plugin[1]}-${version}.zip`, `${PREFIX}/${plugin[1]}/${plugin[1]}-${version}.zip`);
 
-    zipLocal.sync.zip(`./src/${plugin}`).compress().save(`./dist/${plugin}/${plugin}-${version}.zip`);
-}
-
-addonsXmlContent += "</addons>";
-fs.writeFileSync(`${PREFIX}/addons.xml`, addonsXmlContent);
-fs.writeFileSync(`${PREFIX}/addons.xml.md5`, crypto.createHash("md5").update(addonsXmlContent).digest("hex"));
+    finished++;
+});
+new Promise((res, rej) => {
+    let l = Object.keys(plugins).length;
+    let x = setInterval(() => {
+        if (finished == l) {
+            res();
+            clearInterval(x);
+        }
+    }, 50);
+}).then(() => {
+    addonsXmlContent += "</addons>";
+    fs.writeFileSync(`${PREFIX}/addons.xml`, addonsXmlContent);
+    fs.writeFileSync(`${PREFIX}/addons.xml.md5`, crypto.createHash("md5").update(addonsXmlContent).digest("hex"));
+});
